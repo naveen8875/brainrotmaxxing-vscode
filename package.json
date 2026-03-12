@@ -1,0 +1,143 @@
+{
+  "name": "brainrotmaxxing",
+  "displayName": "BrainrotMaxxing",
+  "description": "Run Instagram Reels inside VS Code using a system-browser sidecar with diagnostics and runtime validation.",
+  "version": "0.0.9",
+  "publisher": "naveenchoudhary",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "instagram",
+    "reels",
+    "chromium",
+    "sidecar",
+    "webview",
+    "productivity",
+    "side-by-side",
+    "coding"
+  ],
+  "activationEvents": [
+    "onCommand:brainrotmaxxing.openInstagramSideBySide",
+    "onCommand:brainrotmaxxing.openReelsSidecar",
+    "onCommand:brainrotmaxxing.installRuntime",
+    "onCommand:brainrotmaxxing.runIntegratedDiagnostics",
+    "onCommand:brainrotmaxxing.restartSidecar"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "brainrotmaxxing.openInstagramSideBySide",
+        "title": "BrainrotMaxxing: Open Reels in VS Code (Sidecar)",
+        "category": "BrainrotMaxxing"
+      },
+      {
+        "command": "brainrotmaxxing.openReelsSidecar",
+        "title": "BrainrotMaxxing: Open Reels in VS Code (Sidecar)",
+        "category": "BrainrotMaxxing"
+      },
+      {
+        "command": "brainrotmaxxing.installRuntime",
+        "title": "BrainrotMaxxing: Validate System Browser Runtime",
+        "category": "BrainrotMaxxing"
+      },
+      {
+        "command": "brainrotmaxxing.runIntegratedDiagnostics",
+        "title": "BrainrotMaxxing: Run Sidecar Diagnostics",
+        "category": "BrainrotMaxxing"
+      },
+      {
+        "command": "brainrotmaxxing.restartSidecar",
+        "title": "BrainrotMaxxing: Restart Sidecar",
+        "category": "BrainrotMaxxing"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "brainrotmaxxing.openInstagramSideBySide",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i"
+      }
+    ],
+    "configuration": {
+      "title": "BrainrotMaxxing",
+      "properties": {
+        "brainrotmaxxing.profile.mode": {
+          "type": "string",
+          "enum": [
+            "persistent",
+            "ephemeral"
+          ],
+          "default": "persistent",
+          "description": "Profile persistence mode for the sidecar browser session."
+        },
+        "brainrotmaxxing.viewport.mode": {
+          "type": "string",
+          "enum": [
+            "mobile",
+            "desktop"
+          ],
+          "default": "desktop",
+          "description": "Viewport emulation mode for sidecar rendering."
+        },
+        "brainrotmaxxing.stream.fpsCap": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 60,
+          "description": "Maximum target FPS for the sidecar frame stream."
+        },
+        "brainrotmaxxing.audio.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable audio pipeline when available (Phase 2)."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "playwright-core": "^1.58.2",
+    "ws": "^8.19.0"
+  },
+  "optionalDependencies": {
+    "fsevents": "^2.3.3"
+  },
+  "os": [
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Requires local runtime installation and sidecar process execution."
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "compile-tests": "tsc -p tests/tsconfig.json",
+    "pretest": "npm run compile && npm run compile-tests",
+    "test": "mocha out-test/tests/**/*.test.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.8",
+    "@types/node": "^20.17.20",
+    "@types/sinon": "^17.0.4",
+    "@types/vscode": "^1.95.0",
+    "@types/ws": "^8.18.1",
+    "mocha": "^10.8.2",
+    "sinon": "^19.0.2",
+    "typescript": "^5.8.2"
+  }
+}

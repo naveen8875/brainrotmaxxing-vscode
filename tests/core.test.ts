@@ -92,6 +92,11 @@ function createDependencies() {
     lastError: null,
     codecSupport: "supported",
     codecDetails: "{}",
+    audioStreaming: true,
+    audioMimeType: "audio/webm;codecs=opus",
+    audioChunksSent: 12,
+    lastAudioAt: new Date(NOW_MS).toISOString(),
+    audioError: null,
   });
 
   const deps = {
@@ -334,10 +339,15 @@ describe("BrainrotMaxxing core sidecar", () => {
         lastError: null,
         codecSupport: "unsupported",
         codecDetails: null,
+        audioStreaming: false,
+        audioMimeType: null,
+        audioChunksSent: 0,
+        lastAudioAt: null,
+        audioError: null,
       },
       profileLockEvents: 0,
       profileHealth: { exists: false, writable: false },
-      audio: { enabledSetting: true, status: "not_implemented" },
+      audio: { enabledSetting: true, status: "ready" },
     });
     assert.equal(evaluation.riskLevel, "high");
   });

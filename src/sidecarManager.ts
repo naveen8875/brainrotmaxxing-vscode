@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as readline from "readline";
 import { spawn, ChildProcess } from "child_process";
+import { randomBytes } from "crypto";
 import * as net from "net";
 import * as vscode from "vscode";
 import {
@@ -31,6 +32,7 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
   private worker: ChildProcess | null = null;
   private workerReadline: readline.Interface | null = null;
   private panel: vscode.WebviewPanel | null = null;
+  private connectionPath: string | null = null;
   private stats: SidecarStats = {
     running: false,
     port: null,
@@ -42,6 +44,11 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
     lastError: null,
     codecSupport: "unknown",
     codecDetails: null,
+    audioStreaming: false,
+    audioMimeType: null,
+    audioChunksSent: 0,
+    lastAudioAt: null,
+    audioError: null,
   };
   private lastOpenOptions: OpenOptions | null = null;
 
@@ -75,12 +82,18 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
     }
 
     const port = this.stats.port;
-    if (!port) {
+    const connectionPath = this.connectionPath;
+    if (!port || !connectionPath) {
       throw new Error("Sidecar did not report a running port.");
     }
 
     this.panel.title = "BrainrotMaxxing Sidecar";
-    this.panel.webview.html = getPanelHtml(this.panel.webview, port, options.startUrl);
+    this.panel.webview.html = getPanelHtml(
+      this.panel.webview,
+      port,
+      connectionPath,
+      options.startUrl
+    );
     this.panel.reveal(vscode.ViewColumn.Beside, false);
   }
 
@@ -95,6 +108,7 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
         type: "sidecarPort",
         payload: {
           port: this.stats.port,
+          connectionPath: this.connectionPath,
           startUrl: this.lastOpenOptions.startUrl,
         },
       });
@@ -123,6 +137,7 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
 
     await fs.mkdir(options.profileDir, { recursive: true });
     const port = await reserveFreePort();
+    const connectionPath = createConnectionPath();
     const workerScriptPath = getWorkerScriptPath(__dirname);
     if (!(await pathExists(workerScriptPath))) {
       throw new Error(`Worker script is missing at ${workerScriptPath}`);
@@ -133,6 +148,7 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
       executablePath: options.runtime.executablePath,
       profileDir: options.profileDir,
       startUrl: options.startUrl,
+      connectionPath,
       viewportMode: options.viewportMode,
       fpsCap: options.fpsCap,
       audioEnabled: options.audioEnabled,
@@ -148,6 +164,7 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
       });
 
       this.worker = child;
+      this.connectionPath = connectionPath;
       if (!child.stdout) {
         reject(new Error("Sidecar worker stdout was not available."));
         return;
@@ -196,6 +213,7 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
       child.on("exit", (code, signal) => {
         this.stats.running = false;
         this.stats.port = null;
+        this.connectionPath = null;
         this.stats.lastError = `Exited (code=${String(code)} signal=${String(
           signal
         )})`;
@@ -218,6 +236,7 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
     this.worker = null;
     this.stats.running = false;
     this.stats.port = null;
+    this.connectionPath = null;
     this.workerReadline?.close();
     this.workerReadline = null;
 
@@ -302,6 +321,26 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
           typeof payload.codecDetails === "string" || payload.codecDetails === null
             ? payload.codecDetails
             : this.stats.codecDetails,
+        audioStreaming:
+          typeof payload.audioStreaming === "boolean"
+            ? payload.audioStreaming
+            : this.stats.audioStreaming,
+        audioMimeType:
+          typeof payload.audioMimeType === "string" || payload.audioMimeType === null
+            ? payload.audioMimeType
+            : this.stats.audioMimeType,
+        audioChunksSent:
+          typeof payload.audioChunksSent === "number"
+            ? payload.audioChunksSent
+            : this.stats.audioChunksSent,
+        lastAudioAt:
+          typeof payload.lastAudioAt === "string" || payload.lastAudioAt === null
+            ? payload.lastAudioAt
+            : this.stats.lastAudioAt,
+        audioError:
+          typeof payload.audioError === "string" || payload.audioError === null
+            ? payload.audioError
+            : this.stats.audioError,
       };
       return;
     }
@@ -313,16 +352,22 @@ export class SidecarManager implements SidecarManagerLike, vscode.Disposable {
   }
 }
 
-function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): string {
+function getPanelHtml(
+  webview: vscode.Webview,
+  port: number,
+  connectionPath: string,
+  startUrl: string
+): string {
   const nonce = createNonce();
   const escapedUrl = escapeHtml(startUrl);
+  const escapedConnectionPath = escapeJsString(connectionPath);
   return `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ws://127.0.0.1:*;"
+      content="default-src 'none'; img-src data:; media-src blob: data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src ws://127.0.0.1:*;"
     />
     <style>
       html, body {
@@ -395,6 +440,9 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
         user-select: none;
         outline: none;
       }
+      #audio-player {
+        display: none;
+      }
       .status {
         position: absolute;
         z-index: 6;
@@ -451,6 +499,7 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
       </div>
       <div id="viewer-wrap" class="viewer-wrap">
         <img id="viewer" tabindex="0" draggable="false" />
+        <audio id="audio-player" autoplay></audio>
         <div id="overlay" class="overlay">
           <div class="overlay-card">
             <span>Sidecar stream heartbeat lost.</span>
@@ -464,6 +513,7 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
       const vscode = acquireVsCodeApi();
       const viewer = document.getElementById("viewer");
       const viewerWrap = document.getElementById("viewer-wrap");
+      const audioPlayer = document.getElementById("audio-player");
       const statusEl = document.getElementById("status");
       const overlay = document.getElementById("overlay");
       const urlInput = document.getElementById("url");
@@ -472,10 +522,16 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
       const overlayRestartButton = document.getElementById("overlay-restart");
       let ws = null;
       let port = ${port};
+      let connectionPath = "${escapedConnectionPath}";
       let frameWidth = 1280;
       let frameHeight = 720;
       let lastPongAt = 0;
       let lastMessageAt = 0;
+      let mediaSource = null;
+      let sourceBuffer = null;
+      let audioMimeType = null;
+      let audioQueue = [];
+      let audioObjectUrl = null;
       let pingTimer = null;
       let reconnectTimer = null;
       let resizeTimer = null;
@@ -505,9 +561,119 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
         overlay.classList.toggle("visible", visible);
       };
 
+      const clearAudioBuffer = () => {
+        audioQueue = [];
+        sourceBuffer = null;
+        if (mediaSource) {
+          try {
+            if (mediaSource.readyState === "open") {
+              mediaSource.endOfStream();
+            }
+          } catch {}
+        }
+        mediaSource = null;
+        audioMimeType = null;
+        if (audioPlayer) {
+          try {
+            audioPlayer.pause();
+          } catch {}
+          audioPlayer.removeAttribute("src");
+          audioPlayer.load();
+        }
+        if (audioObjectUrl) {
+          URL.revokeObjectURL(audioObjectUrl);
+          audioObjectUrl = null;
+        }
+      };
+
+      const appendNextAudioChunk = () => {
+        if (!sourceBuffer || sourceBuffer.updating || audioQueue.length === 0) {
+          return;
+        }
+        const nextChunk = audioQueue.shift();
+        try {
+          sourceBuffer.appendBuffer(nextChunk);
+        } catch {
+          clearAudioBuffer();
+          setStatus("Audio playback reset.", true);
+        }
+      };
+
+      const ensureAudioPipeline = (mimeType) => {
+        if (!audioPlayer || !window.MediaSource || !mimeType) {
+          return false;
+        }
+        if (mediaSource && sourceBuffer && audioMimeType === mimeType) {
+          return true;
+        }
+
+        clearAudioBuffer();
+        audioMimeType = mimeType;
+        mediaSource = new MediaSource();
+        audioObjectUrl = URL.createObjectURL(mediaSource);
+        audioPlayer.src = audioObjectUrl;
+        mediaSource.addEventListener("sourceopen", () => {
+          if (!mediaSource || mediaSource.readyState !== "open" || sourceBuffer) {
+            return;
+          }
+          try {
+            sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+            sourceBuffer.mode = "sequence";
+            sourceBuffer.addEventListener("updateend", () => {
+              if (
+                audioPlayer.buffered &&
+                audioPlayer.buffered.length > 0 &&
+                audioPlayer.currentTime > 0 &&
+                audioPlayer.buffered.end(audioPlayer.buffered.length - 1) -
+                  audioPlayer.currentTime >
+                  12
+              ) {
+                const trimEnd = audioPlayer.currentTime - 1;
+                if (trimEnd > 0) {
+                  try {
+                    sourceBuffer.remove(0, trimEnd);
+                  } catch {}
+                }
+              }
+              appendNextAudioChunk();
+            });
+            appendNextAudioChunk();
+          } catch {
+            clearAudioBuffer();
+            setStatus("Audio codec unsupported in webview.", true);
+          }
+        }, { once: true });
+        return true;
+      };
+
+      const decodeBase64 = (value) => {
+        const binary = atob(value);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        return bytes;
+      };
+
+      const resumeAudioPlayback = () => {
+        if (!audioPlayer) {
+          return;
+        }
+        const playPromise = audioPlayer.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(() => {
+            setStatus("Click in the panel to start audio.", true);
+          });
+        }
+      };
+
       const connect = () => {
         if (!port) {
           setStatus("Missing sidecar port.", true);
+          return;
+        }
+        if (!connectionPath) {
+          setStatus("Missing sidecar auth path.", true);
           return;
         }
         if (ws) {
@@ -515,7 +681,7 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
           ws = null;
         }
         setStatus("Connecting to sidecar...", true);
-        ws = new WebSocket("ws://127.0.0.1:" + port);
+        ws = new WebSocket("ws://127.0.0.1:" + port + connectionPath);
 
         ws.onopen = () => {
           connected = true;
@@ -525,6 +691,7 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
           showOverlay(false);
           pushResize();
           viewer.focus();
+          resumeAudioPlayback();
           if (pingTimer) {
             clearInterval(pingTimer);
           }
@@ -551,6 +718,27 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
             showOverlay(false);
             return;
           }
+          if (message.type === "audioChunk" && message.payload) {
+            const payload = message.payload;
+            if (!ensureAudioPipeline(payload.mimeType)) {
+              return;
+            }
+            audioQueue.push(decodeBase64(payload.data));
+            appendNextAudioChunk();
+            resumeAudioPlayback();
+            return;
+          }
+          if (message.type === "audioStatus" && message.payload) {
+            const payload = message.payload;
+            if (payload.error) {
+              setStatus("Audio issue: " + payload.error, true);
+              return;
+            }
+            if (payload.streaming) {
+              resumeAudioPlayback();
+            }
+            return;
+          }
           if (message.type === "hello") {
             setStatus("Sidecar stream ready.");
             return;
@@ -563,6 +751,7 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
 
         ws.onclose = () => {
           connected = false;
+          clearAudioBuffer();
           setStatus("Disconnected. Reconnecting...", true);
           showOverlay(true);
           if (pingTimer) {
@@ -625,27 +814,33 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
       };
 
       viewer.addEventListener("mousemove", (event) => {
+        resumeAudioPlayback();
         const { x, y } = mapCoords(event);
         send({ type: "input", payload: { kind: "mouse", eventType: "move", x, y } });
       });
       viewer.addEventListener("mousedown", (event) => {
+        resumeAudioPlayback();
         const { x, y } = mapCoords(event);
         send({ type: "input", payload: { kind: "mouse", eventType: "down", x, y, button: event.button === 1 ? "middle" : event.button === 2 ? "right" : "left" } });
         event.preventDefault();
       });
       viewer.addEventListener("mouseup", (event) => {
+        resumeAudioPlayback();
         const { x, y } = mapCoords(event);
         send({ type: "input", payload: { kind: "mouse", eventType: "up", x, y, button: event.button === 1 ? "middle" : event.button === 2 ? "right" : "left" } });
       });
       viewer.addEventListener("wheel", (event) => {
+        resumeAudioPlayback();
         const { x, y } = mapCoords(event);
         send({ type: "input", payload: { kind: "wheel", x, y, deltaX: event.deltaX, deltaY: event.deltaY } });
         event.preventDefault();
       }, { passive: false });
       viewer.addEventListener("keydown", (event) => {
+        resumeAudioPlayback();
         send({ type: "input", payload: { kind: "key", eventType: "down", key: event.key, code: event.code, keyCode: event.keyCode || event.which || 0 } });
       });
       viewer.addEventListener("keyup", (event) => {
+        resumeAudioPlayback();
         send({ type: "input", payload: { kind: "key", eventType: "up", key: event.key, code: event.code, keyCode: event.keyCode || event.which || 0 } });
       });
 
@@ -676,6 +871,9 @@ function getPanelHtml(webview: vscode.Webview, port: number, startUrl: string): 
         }
         if (message.type === "sidecarPort" && message.payload) {
           port = message.payload.port;
+          if (typeof message.payload.connectionPath === "string") {
+            connectionPath = message.payload.connectionPath;
+          }
           if (message.payload.startUrl) {
             urlInput.value = message.payload.startUrl;
           }
@@ -766,6 +964,12 @@ function escapeHtml(value: string): string {
     .join("&#39;");
 }
 
+function escapeJsString(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+}
+
 function createNonce(): string {
   const chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -774,4 +978,8 @@ function createNonce(): string {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return result;
+}
+
+function createConnectionPath(): string {
+  return `/brainrotmaxxing/${randomBytes(24).toString("hex")}`;
 }

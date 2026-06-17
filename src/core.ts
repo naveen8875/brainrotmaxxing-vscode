@@ -95,6 +95,11 @@ export interface SidecarStats {
   lastError: string | null;
   codecSupport: "unknown" | "supported" | "unsupported";
   codecDetails: string | null;
+  audioStreaming: boolean;
+  audioMimeType: string | null;
+  audioChunksSent: number;
+  lastAudioAt: string | null;
+  audioError: string | null;
 }
 
 export interface LastDiagnosticsSnapshot {
@@ -401,8 +406,8 @@ export async function runSidecarDiagnostics(
 
   const audio = {
     enabledSetting: audioEnabled,
-    phase: "phase1_pending" as const,
-    status: audioEnabled ? ("not_implemented" as const) : ("disabled" as const),
+    phase: "phase2_ready" as const,
+    status: audioEnabled ? ("ready" as const) : ("disabled" as const),
   };
 
   const evaluation = evaluateSidecarRisk({
@@ -516,6 +521,21 @@ export async function runSidecarDiagnostics(
   );
   dependencies.output.appendLine(`- Phase: ${diagnostics.audio.phase}`);
   dependencies.output.appendLine(`- Status: ${diagnostics.audio.status}`);
+  dependencies.output.appendLine(
+    `- Streaming: ${String(diagnostics.sidecar.audioStreaming)}`
+  );
+  dependencies.output.appendLine(
+    `- Mime Type: ${diagnostics.sidecar.audioMimeType ?? "unknown"}`
+  );
+  dependencies.output.appendLine(
+    `- Chunks Sent: ${diagnostics.sidecar.audioChunksSent}`
+  );
+  dependencies.output.appendLine(
+    `- Last Audio At: ${diagnostics.sidecar.lastAudioAt ?? "unknown"}`
+  );
+  dependencies.output.appendLine(
+    `- Audio Error: ${diagnostics.sidecar.audioError ?? "none"}`
+  );
 
   dependencies.output.appendLine("");
   dependencies.output.appendLine(`Risk: ${diagnostics.riskLevel.toUpperCase()}`);
@@ -622,6 +642,12 @@ export function evaluateSidecarRisk(input: {
     score += 1;
     recommendations.push(
       "High dropped frame count detected. Restart sidecar and reduce FPS cap."
+    );
+  }
+  if (input.audio.enabledSetting && input.sidecar.audioError) {
+    score += 2;
+    recommendations.push(
+      `Audio capture reported an error: ${input.sidecar.audioError}`
     );
   }
   if (input.audio.enabledSetting && input.audio.status === "not_implemented") {
